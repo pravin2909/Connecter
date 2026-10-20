@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +17,8 @@ from app.db.session import SessionLocal
 log = logging.getLogger(__name__)
 
 ACTIVE = ("pending", "running", "awaiting_approval")
+# A generated title that still contains model/harmony leakage — reject it.
+_GARBAGE_TITLE = re.compile(r"(to=|<\||[{}]|```|\b(commentary|analysis|assistant)\b)", re.IGNORECASE)
 
 
 class RunError(Exception):
@@ -67,7 +70,10 @@ class AgentRunner:
             await db.refresh(run)
 
         run_id = str(run.id)
-        state = {"run_id": run_id, "goal": content, "history": history, "messages": [], "pending": []}
+        state = {
+            "run_id": run_id, "user_id": str(convo.user_id), "goal": content,
+            "history": history, "messages": [], "pending": [],
+        }
         self._spawn(run_id, state)
         if first_turn and self.llm is not None:
             asyncio.create_task(self._llm_title(conversation_id, content))
@@ -117,6 +123,7 @@ class AgentRunner:
         answer = values.get("final_answer") or ""
         async with SessionLocal() as db:
             run = await db.get(AgentRun, uuid.UUID(run_id))
+            goal = run.goal
             msg = Message(
                 conversation_id=run.conversation_id, role="assistant", content=answer,
                 agent_run_id=run.id, citations=values.get("citations", []),
@@ -128,8 +135,35 @@ class AgentRunner:
             await db.refresh(msg)
         await self._set_status(run_id, "completed", finished=True)
         self.emitter.event(run_id, "message", message=message_dict(msg))
+        # Offer a few next questions (best-effort; never block or fail the run).
+        followups = await self._followups(goal, answer)
+        if followups:
+            self.emitter.event(run_id, "suggestions", persist=False, items=followups)
         self.emitter.event(run_id, "status", status="completed")
         self.emitter.event(run_id, "done", status="completed")
+
+    async def _followups(self, goal: str, answer: str) -> list[str]:
+        if self.llm is None or not answer:
+            return []
+        schema = {
+            "type": "object",
+            "properties": {"followups": {"type": "array", "items": {"type": "string"}}},
+            "required": ["followups"],
+        }
+        try:
+            out = await self.llm.complete_json(
+                [
+                    {"role": "system", "content": "Suggest 3 short, natural follow-up questions the user might ask "
+                     "next, each under 12 words. Return JSON {\"followups\": [...]}."},
+                    {"role": "user", "content": f"Task: {goal[:500]}\n\nAnswer: {answer[:1500]}"},
+                ],
+                schema, name="followups",
+            )
+            items = [str(s).strip() for s in out.get("followups", []) if str(s).strip()]
+            return items[:3]
+        except Exception:
+            log.debug("Follow-up generation failed", exc_info=True)
+            return []
 
     # ------------------------------------------------------------------ approvals
     async def decide(self, approval_id: uuid.UUID, decision: str, note: str | None) -> Approval:
@@ -242,7 +276,9 @@ class AgentRunner:
                 temperature=0,
             )
             title = resp.content.strip().strip('"').splitlines()[0][:60] if resp.content else ""
-            if title:
+            # Reject harmony/reasoning garbage (gpt-oss sometimes leaks it); keep the
+            # heuristic title already set at run start instead.
+            if title and not _GARBAGE_TITLE.search(title):
                 async with SessionLocal() as db:
                     convo = await db.get(Conversation, conversation_id)
                     convo.title = title

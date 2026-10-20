@@ -4,11 +4,17 @@ import { useUI } from '../store'
 import { api, type ConversationDetail, type Step } from './api'
 
 export const keys = {
+  me: ['me'] as const,
   conversations: ['conversations'] as const,
   conversation: (id: string) => ['conversation', id] as const,
   documents: ['documents'] as const,
   health: ['health'] as const,
   tools: ['tools'] as const,
+}
+
+export function useMe() {
+  // A 401 is a normal "not signed in" answer, not an error to retry.
+  return useQuery({ queryKey: keys.me, queryFn: api.me, retry: false, staleTime: 60_000 })
 }
 
 export function useConversations() {
@@ -55,6 +61,9 @@ export function useUploadDocument() {
 export function useRunEvents(conversationId: string | null, runId: string | null, running: boolean) {
   const qc = useQueryClient()
   const setScreenshot = useUI((s) => s.setScreenshot)
+  const appendToken = useUI((s) => s.appendToken)
+  const clearStream = useUI((s) => s.clearStream)
+  const setSuggestions = useUI((s) => s.setSuggestions)
 
   useEffect(() => {
     if (!conversationId || !runId || !running) return
@@ -84,11 +93,27 @@ export function useRunEvents(conversationId: string | null, runId: string | null
       const { url } = JSON.parse((e as MessageEvent).data) as { url: string }
       setScreenshot(runId, url)
     })
-    for (const type of ['approval_required', 'message', 'error']) es.addEventListener(type, refresh)
+    // Live answer streaming: accumulate tokens, and drop them when the turn becomes a tool
+    // call (answer_reset) or when the final persisted message arrives.
+    es.addEventListener('token', (e) => {
+      const { text } = JSON.parse((e as MessageEvent).data) as { text: string }
+      appendToken(runId, text)
+    })
+    es.addEventListener('answer_reset', () => clearStream(runId))
+    es.addEventListener('message', () => {
+      clearStream(runId)
+      refresh()
+    })
+    es.addEventListener('suggestions', (e) => {
+      const { items } = JSON.parse((e as MessageEvent).data) as { items: string[] }
+      setSuggestions(conversationId, items)
+    })
+    for (const type of ['approval_required', 'error']) es.addEventListener(type, refresh)
     es.addEventListener('done', () => {
       es.close()
+      clearStream(runId)
       refresh()
     })
     return () => es.close()
-  }, [conversationId, runId, running, qc, setScreenshot])
+  }, [conversationId, runId, running, qc, setScreenshot, appendToken, clearStream, setSuggestions])
 }

@@ -26,6 +26,14 @@ interface UIState {
   theme: Theme
   /** Latest browser screenshot per run, from `screenshot` SSE events. */
   screenshots: Record<string, string>
+  /** Live answer text per run, accumulated from `token` SSE events while it streams. */
+  streams: Record<string, string>
+  /** Suggested follow-up questions per conversation, from the `suggestions` SSE event. */
+  suggestions: Record<string, string[]>
+  /** Whether the chat-search command palette is open. */
+  searchOpen: boolean
+  /** Whether the settings modal is open. */
+  settingsOpen: boolean
   openChat: (conversationId?: string | null) => void
   openHome: () => void
   selectConversation: (id: string | null) => void
@@ -35,6 +43,12 @@ interface UIState {
   setTheme: (theme: Theme) => void
   toggleTheme: () => void
   setScreenshot: (runId: string, url: string) => void
+  appendToken: (runId: string, text: string) => void
+  clearStream: (runId: string) => void
+  setSuggestions: (conversationId: string, items: string[]) => void
+  clearSuggestions: (conversationId: string) => void
+  setSearchOpen: (open: boolean) => void
+  setSettingsOpen: (open: boolean) => void
 }
 
 const wide = typeof window === 'undefined' || window.innerWidth > 900
@@ -48,6 +62,10 @@ export const useUI = create<UIState>((set) => ({
   sidebarExpanded: wide,
   theme: initialTheme(),
   screenshots: {},
+  streams: {},
+  suggestions: {},
+  searchOpen: false,
+  settingsOpen: false,
   openChat: (conversationId) =>
     set((s) => ({ view: 'chat', conversationId: conversationId === undefined ? s.conversationId : conversationId })),
   openHome: () => set({ view: 'home' }),
@@ -68,4 +86,22 @@ export const useUI = create<UIState>((set) => ({
   // Auto-open the screen panel when the agent produces a browser screenshot.
   setScreenshot: (runId, url) =>
     set((s) => ({ screenshots: { ...s.screenshots, [runId]: url }, panelOpen: true })),
+  appendToken: (runId, text) =>
+    set((s) => ({ streams: { ...s.streams, [runId]: (s.streams[runId] ?? '') + text } })),
+  clearStream: (runId) =>
+    set((s) => {
+      if (!(runId in s.streams)) return s
+      const { [runId]: _, ...rest } = s.streams
+      return { streams: rest }
+    }),
+  setSuggestions: (conversationId, items) =>
+    set((s) => ({ suggestions: { ...s.suggestions, [conversationId]: items } })),
+  clearSuggestions: (conversationId) =>
+    set((s) => {
+      if (!(conversationId in s.suggestions)) return s
+      const { [conversationId]: _, ...rest } = s.suggestions
+      return { suggestions: rest }
+    }),
+  setSearchOpen: (open) => set({ searchOpen: open }),
+  setSettingsOpen: (open) => set({ settingsOpen: open }),
 }))

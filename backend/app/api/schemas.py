@@ -9,11 +9,30 @@ class ORM(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class UserOut(ORM):
+    id: uuid.UUID
+    email: str
+    display_name: str
+    created_at: datetime
+
+
+class RegisterIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=256)
+    display_name: str | None = Field(default=None, max_length=120)
+
+
+class LoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+
+
 class ConversationOut(ORM):
     id: uuid.UUID
     title: str
     color: str
     preview: str | None
+    pinned: bool
     created_at: datetime
     updated_at: datetime
 
@@ -26,6 +45,7 @@ class ConversationCreate(BaseModel):
 class ConversationPatch(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     color: str | None = None
+    pinned: bool | None = None
 
 
 class MessageOut(ORM):

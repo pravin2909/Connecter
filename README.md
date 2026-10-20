@@ -33,6 +33,8 @@ cd ../frontend && npm install && npm run dev    # http://localhost:5173
 
 The first document you upload downloads the embedding and reranker models (~200 MB, once).
 
+**Auth.** Set `AUTH_ENABLED=true` in `.env` for a shared/multi-user deployment: each user signs in with email + password and sees only their own conversations, documents and runs (the document index is partitioned per user in Qdrant). Left at `false` (the default for local dev), the app runs single-user with no login. Set `SECURE_COOKIES=true` when serving over HTTPS.
+
 Tests: `cd backend && .venv/bin/pytest` (the agent-loop tests use the Postgres from docker compose).
 
 ## How a run works
@@ -55,6 +57,8 @@ Tests: `cd backend && .venv/bin/pytest` (the agent-loop tests use the Postgres f
 
 | Method | Path | Purpose |
 |---|---|---|
+| POST | `/api/auth/register` · `/api/auth/login` · `/api/auth/logout` | email/password session (httpOnly cookie) |
+| GET | `/api/auth/me` | current user (used by the SPA's auth gate) |
 | POST | `/api/conversations/{id}/messages` | start a run |
 | GET | `/api/runs/{id}/events` | SSE live activity |
 | POST | `/api/approvals/{id}/decision` | `{"decision": "approve" \| "reject"}` |

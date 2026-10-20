@@ -56,6 +56,16 @@ _LABELS = {
     "browser__read_page": "Reading browser page",
     "browser__click": "Clicking in browser",
     "browser__type": "Typing in browser",
+    "browser__select_option": "Choosing an option",
+    "browser__hover": "Hovering in browser",
+    "browser__go_back": "Going back",
+    "browser__go_forward": "Going forward",
+    "browser__wait_for": "Waiting for the page",
+    "browser__press_key": "Pressing {key}",
+    "browser__scroll": "Scrolling",
+    "browser__click_at": "Clicking the screen",
+    "browser__drag": "Dragging in browser",
+    "browser__look": "Looking at the screen",
 }
 
 
@@ -86,7 +96,10 @@ class AgentNodes:
     async def understand(self, state: AgentState) -> dict[str, Any]:
         await self.d.emitter.step(state["run_id"], "understand", "Understanding request")
         async with SessionLocal() as db:
-            docs = (await db.scalars(select(Document.filename).where(Document.status == "ready"))).all()
+            q = select(Document.filename).where(Document.status == "ready")
+            if state.get("user_id"):
+                q = q.where(Document.user_id == uuid.UUID(state["user_id"]))
+            docs = (await db.scalars(q)).all()
         return {
             "documents": list(docs),
             "available_capabilities": self.d.registry.available_capabilities(),
@@ -127,9 +140,13 @@ class AgentNodes:
             log.warning("Planning failed, using all capabilities: %s", e)
             plan, caps = {"summary": state["goal"], "needs_tools": True, "steps": []}, available
         plan["capabilities"] = caps
+        # Small models (esp. gpt-oss) sometimes leak chain-of-thought or degenerate into
+        # repeated braces inside the plan JSON. Sanitize before showing or storing it.
+        plan["steps"] = _clean_steps(plan.get("steps", []))
+        plan["summary"] = _clean_plan_text(plan.get("summary", ""), 200)
         await self.d.emitter.step(
             run_id, "plan", "Re-planned" if replanning else "Planned", "done",
-            {"steps": plan.get("steps", []), "capabilities": caps}, seq=seq,
+            {"steps": plan["steps"], "capabilities": caps}, seq=seq,
         )
         async with SessionLocal() as db:
             run = await db.get(AgentRun, uuid.UUID(run_id))
@@ -153,6 +170,7 @@ class AgentNodes:
         ]
 
     async def agent(self, state: AgentState) -> dict[str, Any]:
+        run_id = state["run_id"]
         caps = state.get("capabilities", [])
         # The plan gates the action tools, but read-only lookup (document + web search)
         # is always available so the agent can check instead of claiming "no access".
@@ -162,9 +180,16 @@ class AgentNodes:
             if s["function"]["name"] not in seen:
                 schemas.append(s)
         tools = schemas or None
-        resp = await self.d.llm.chat(self._llm_messages(state), tools=tools)
+
+        async def on_token(text: str) -> None:
+            self.d.emitter.event(run_id, "token", persist=False, text=text)
+
+        resp = await self.d.llm.chat(self._llm_messages(state), tools=tools, on_token=on_token)
         update: dict[str, Any] = {"messages": [resp.as_message()]}
         if resp.tool_calls:
+            # This turn is an action, not the answer: clear any text streamed before the
+            # model decided to call a tool, so it doesn't linger as a half-answer.
+            self.d.emitter.event(run_id, "answer_reset", persist=False)
             update["pending"] = [
                 PendingCall(call_id=tc.id, name=tc.name, arguments=tc.arguments, parse_error=tc.parse_error)
                 for tc in resp.tool_calls
@@ -275,7 +300,7 @@ class AgentNodes:
 
             label = activity_label(name, args)
             seq = await self.d.emitter.step(run_id, "tool", label, "running", {"tool": name})
-            out = await self.d.registry.call(name, args)
+            out = await self.d.registry.call(name, args, user_id=state.get("user_id"))
 
             if out.data and "chunks" in out.data:
                 text, citations = _number_chunks(out.data["chunks"], citations)
@@ -345,7 +370,11 @@ class AgentNodes:
             if msgs[-1].get("tool_calls"):
                 msgs.pop()  # unanswered tool calls would be rejected by the API
             msgs.append({"role": "user", "content": FINALIZE_PROMPT})
-            answer = (await self.d.llm.chat(msgs)).content or "I wasn't able to complete this task."
+
+            async def on_token(text: str) -> None:
+                self.d.emitter.event(run_id, "token", persist=False, text=text)
+
+            answer = (await self.d.llm.chat(msgs, on_token=on_token)).content or "I wasn't able to complete this task."
         cited = {int(n) for n in re.findall(r"\[(\d+)\]", answer)}
         citations = [c for c in state.get("citations", []) if c["n"] in cited] if cited else []
         if citations:
@@ -353,6 +382,33 @@ class AgentNodes:
                                       detail={"sources": len(citations)})
         await self.d.emitter.step(run_id, "complete", "Completed")
         return {"final_answer": answer, "citations": citations, "pending": []}
+
+
+# Degenerate brace runs, possibly space-separated (e.g. "} } } }" or "}}}}").
+_BRACE_RUN = re.compile(r"(?:[}{\[\]]\s*){3,}")
+
+
+def _clean_plan_text(text: Any, limit: int) -> str:
+    """Strip degenerate brace runs and collapse whitespace from a plan string."""
+    s = _BRACE_RUN.sub(" ", str(text or ""))
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:limit].strip()
+
+
+def _clean_steps(steps: Any) -> list[str]:
+    """Clean and cap plan steps; drop empty or clearly degenerate (leaked-reasoning) ones."""
+    out: list[str] = []
+    for step in steps or []:
+        t = _clean_plan_text(step, 140)
+        if len(t) < 3:
+            continue
+        # A legit step is a short instruction; a leaked-reasoning blob is long and rambling.
+        if len(str(step)) > 300:
+            t = t[:140].rstrip() + "…"
+        out.append(t)
+        if len(out) >= 6:
+            break
+    return out
 
 
 def _tool_msg(call: PendingCall, content: str) -> dict[str, Any]:

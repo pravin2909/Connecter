@@ -31,17 +31,25 @@ class User(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     email: Mapped[str] = mapped_column(String(320), unique=True)
     display_name: Mapped[str] = mapped_column(String(120))
+    # Argon2 hash. Null for the local-mode user and any future OAuth-only accounts.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = _created_at()
 
 
 class Session(Base):
-    """A client session (browser/device) belonging to a user."""
+    """An authenticated login session (one per browser/device) belonging to a user.
+
+    The raw session token lives only in the client's httpOnly cookie; we store its
+    SHA-256 so a database leak can't be replayed as a valid session.
+    """
 
     __tablename__ = "sessions"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     user_agent: Mapped[str | None] = mapped_column(String(512))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created_at()
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -56,6 +64,7 @@ class Conversation(Base):
     title: Mapped[str] = mapped_column(String(200), default="New chat")
     color: Mapped[str] = mapped_column(String(16), default="#E0A03D")
     preview: Mapped[str | None] = mapped_column(String(280))
+    pinned: Mapped[bool] = mapped_column(default=False, server_default="false")
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -169,6 +178,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     file_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("file_metadata.id", ondelete="SET NULL"))
     filename: Mapped[str] = mapped_column(String(512))
     path: Mapped[str] = mapped_column(String(1024))  # relative to FILE_WORKSPACE

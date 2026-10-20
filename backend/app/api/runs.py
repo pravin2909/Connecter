@@ -8,27 +8,35 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agent.runner import RunError, approval_dict
 from app.api.conversations import run_detail
-from app.api.deps import DB, ContainerDep
+from app.api.deps import DB, ContainerDep, CurrentUser
 from app.api.schemas import DecisionIn, RunDetail
-from app.db.models import AgentRun, Approval, ToolCall
+from app.db.models import AgentRun, Approval, Conversation, ToolCall, User
 
 router = APIRouter(tags=["runs"])
 
 
-@router.get("/runs/{run_id}", response_model=RunDetail)
-async def get_run(run_id: uuid.UUID, db: DB):
-    run = await db.get(AgentRun, run_id)
+async def _owned_run(db, run_id: uuid.UUID, user: User) -> AgentRun:
+    """Load a run only if it belongs to one of the user's conversations."""
+    run = await db.scalar(
+        select(AgentRun)
+        .join(Conversation, Conversation.id == AgentRun.conversation_id)
+        .where(AgentRun.id == run_id, Conversation.user_id == user.id)
+    )
     if run is None:
         raise HTTPException(404, "Run not found")
+    return run
+
+
+@router.get("/runs/{run_id}", response_model=RunDetail)
+async def get_run(run_id: uuid.UUID, db: DB, user: CurrentUser):
+    run = await _owned_run(db, run_id, user)
     return await run_detail(db, run)
 
 
 @router.get("/runs/{run_id}/events")
-async def run_events(run_id: uuid.UUID, request: Request, c: ContainerDep, db: DB):
+async def run_events(run_id: uuid.UUID, request: Request, c: ContainerDep, db: DB, user: CurrentUser):
     """Server-Sent Events stream of a run's live activity. Ends with a `done` event."""
-    run = await db.get(AgentRun, run_id)
-    if run is None:
-        raise HTTPException(404, "Run not found")
+    run = await _owned_run(db, run_id, user)
     after = int(request.headers.get("last-event-id") or 0)
 
     async def gen():
@@ -45,10 +53,8 @@ async def run_events(run_id: uuid.UUID, request: Request, c: ContainerDep, db: D
 
 
 @router.post("/runs/{run_id}/cancel", status_code=202)
-async def cancel_run(run_id: uuid.UUID, c: ContainerDep, db: DB):
-    run = await db.get(AgentRun, run_id)
-    if run is None:
-        raise HTTPException(404, "Run not found")
+async def cancel_run(run_id: uuid.UUID, c: ContainerDep, db: DB, user: CurrentUser):
+    run = await _owned_run(db, run_id, user)
     if run.status not in ("pending", "running", "awaiting_approval"):
         raise HTTPException(409, f"Run is already {run.status}")
     await c.runner.cancel(run_id)
@@ -56,7 +62,8 @@ async def cancel_run(run_id: uuid.UUID, c: ContainerDep, db: DB):
 
 
 @router.get("/runs/{run_id}/screenshots/{name}")
-async def screenshot(run_id: uuid.UUID, name: str, c: ContainerDep):
+async def screenshot(run_id: uuid.UUID, name: str, c: ContainerDep, db: DB, user: CurrentUser):
+    await _owned_run(db, run_id, user)
     folder = (c.settings.screenshots_dir / str(run_id)).resolve()
     path = (folder / name).resolve()
     if not path.is_relative_to(folder) or not path.is_file():
@@ -65,8 +72,14 @@ async def screenshot(run_id: uuid.UUID, name: str, c: ContainerDep):
 
 
 @router.get("/approvals")
-async def list_approvals(db: DB, status: str | None = "pending"):
-    q = select(Approval, ToolCall.arguments).join(ToolCall, ToolCall.id == Approval.tool_call_id)
+async def list_approvals(db: DB, user: CurrentUser, status: str | None = "pending"):
+    q = (
+        select(Approval, ToolCall.arguments)
+        .join(ToolCall, ToolCall.id == Approval.tool_call_id)
+        .join(AgentRun, AgentRun.id == Approval.agent_run_id)
+        .join(Conversation, Conversation.id == AgentRun.conversation_id)
+        .where(Conversation.user_id == user.id)
+    )
     if status:
         q = q.where(Approval.status == status)
     rows = (await db.execute(q.order_by(Approval.created_at.desc()).limit(200))).all()
@@ -74,7 +87,15 @@ async def list_approvals(db: DB, status: str | None = "pending"):
 
 
 @router.post("/approvals/{approval_id}/decision")
-async def decide(approval_id: uuid.UUID, body: DecisionIn, c: ContainerDep):
+async def decide(approval_id: uuid.UUID, body: DecisionIn, c: ContainerDep, db: DB, user: CurrentUser):
+    owner = await db.scalar(
+        select(Conversation.user_id)
+        .join(AgentRun, AgentRun.conversation_id == Conversation.id)
+        .join(Approval, Approval.agent_run_id == AgentRun.id)
+        .where(Approval.id == approval_id)
+    )
+    if owner != user.id:
+        raise HTTPException(404, "Approval not found")
     try:
         appr = await c.runner.decide(approval_id, body.decision, body.note)
     except RunError as e:

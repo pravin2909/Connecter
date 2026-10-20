@@ -10,15 +10,16 @@ export function ThemeToggle() {
     { key: 'light' as const, label: 'Light', Icon: SunIcon },
   ]
   return (
-    <div className="flex gap-1 rounded-[10px] border border-line bg-bg2 p-1">
+    <div className="inline-flex gap-0.5 rounded-full border border-line bg-bg2 p-0.5">
       {opts.map(({ key, label, Icon }) => {
         const on = theme === key
         return (
           <button
             key={key}
             onClick={() => setTheme(key)}
-            className={`flex flex-1 items-center justify-center gap-1.5 rounded-[7px] px-2 py-1.5 text-[12.5px] font-medium transition ${
-              on ? 'bg-panel text-ink' : 'text-muted hover:text-ink'
+            title={label}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition ${
+              on ? 'bg-accent text-ink-dark' : 'text-muted hover:text-ink'
             }`}
           >
             <Icon className="size-3.5" />

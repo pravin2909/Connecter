@@ -1,13 +1,14 @@
 import { type Run } from '../../lib/api'
 import { useUI } from '../../store'
-import { CloseIcon } from '../icons'
+import { BrowserIcon, CloseIcon } from '../icons'
 import { Checklist } from './RunBlock'
 
-/** Right-hand panel: the agent's live screen and current run activity.
- *  (Documents and Connected tools now live in the Settings menu.) */
+/** Right-hand panel: the agent's live browser view (only when it's actually browsing) and
+ *  the current run's activity. Documents and Connected tools live in the Settings menu. */
 export function SidePanel({ title, latestRun }: { title: string; latestRun: Run | undefined }) {
   const { panelOpen, setPanelOpen, screenshots } = useUI()
   const screenshot = latestRun ? screenshots[latestRun.id] : undefined
+  const running = latestRun?.status === 'running' || latestRun?.status === 'pending'
 
   return (
     <aside
@@ -18,8 +19,8 @@ export function SidePanel({ title, latestRun }: { title: string; latestRun: Run 
       }`}
     >
       <div className="h-screen w-[320px] overflow-y-auto p-[18px]">
-        <div className="mb-3.5 flex items-center justify-between">
-          <span className="truncate text-[13px] text-muted">{title}'s screen</span>
+        <div className="mb-4 flex items-center justify-between">
+          <span className="truncate text-[13px] font-medium text-ink">{title}</span>
           <button
             title="Close"
             onClick={() => setPanelOpen(false)}
@@ -29,21 +30,35 @@ export function SidePanel({ title, latestRun }: { title: string; latestRun: Run 
           </button>
         </div>
 
-        <div className="relative h-[180px] overflow-hidden rounded-[14px] screen-gradient">
-          {screenshot ? (
-            <a href={screenshot} target="_blank" rel="noreferrer">
-              <img src={screenshot} alt="Agent's browser" className="size-full object-cover object-top" />
+        <div className="mb-2 text-[11px] font-medium tracking-wide text-faint uppercase">Browser</div>
+        {screenshot ? (
+          <>
+            <a
+              href={screenshot}
+              target="_blank"
+              rel="noreferrer"
+              className="block overflow-hidden rounded-[14px] border border-line"
+            >
+              <img src={screenshot} alt="Agent's browser" className="max-h-[320px] w-full object-cover object-top" />
             </a>
-          ) : (
-            <div className="flex size-full items-end p-3 text-xs text-black/60">No browser activity yet</div>
-          )}
-        </div>
-        <div className="mt-[9px] text-xs text-faint">Live view of the agent's current screen</div>
+            <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-faint">
+              {running && <span className="size-1.5 animate-pulse rounded-full bg-approve" />}
+              {running ? "Live view of the agent's browser" : 'Last browser view'}
+            </div>
+          </>
+        ) : (
+          <div className="flex h-[108px] flex-col items-center justify-center gap-2 rounded-[14px] bg-bg2 text-faint">
+            <span className="flex size-9 items-center justify-center rounded-full bg-panel text-muted">
+              <BrowserIcon className="size-[18px]" />
+            </span>
+            <span className="text-[11.5px]">No browser activity yet</span>
+          </div>
+        )}
 
         {latestRun && latestRun.steps.length > 0 && (
-          <div className="mt-[22px]">
-            <h4 className="mb-2.5 text-[12.5px] font-medium text-muted">Activity</h4>
-            <Checklist steps={latestRun.steps} collapsible={false} />
+          <div className="mt-6">
+            <div className="mb-2.5 text-[11px] font-medium tracking-wide text-faint uppercase">Activity</div>
+            <Checklist steps={latestRun.steps} defaultExpanded />
           </div>
         )}
       </div>

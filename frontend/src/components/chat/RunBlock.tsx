@@ -1,9 +1,13 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { api, type Approval, type Run, type Step } from '../../lib/api'
+import { artifactsFromRun } from '../../lib/artifacts'
 import { keys } from '../../lib/hooks'
 import { useUI } from '../../store'
 import { ChevronIcon } from '../icons'
+
+// recharts + leaflet are heavy; only pull them in when a run actually has an artifact.
+const Artifacts = lazy(() => import('./Artifacts').then((m) => ({ default: m.Artifacts })))
 
 /** Everything the agent did for one user message: activity checklist, approvals, status. */
 export function RunBlock({ run }: { run: Run }) {
@@ -28,14 +32,21 @@ export function RunBlock({ run }: { run: Run }) {
   }
   for (const a of run.approvals) if (!placed.has(a.id)) segments.push({ type: 'approval', approval: a })
 
+  const artifacts = artifactsFromRun(run)
+
   return (
     <>
       {segments.map((seg, i) =>
         seg.type === 'steps' ? (
-          <Checklist key={`s${i}`} steps={seg.steps} collapsible={!active} />
+          <Checklist key={`s${i}`} steps={seg.steps} />
         ) : (
           <ApprovalCard key={seg.approval.id} approval={seg.approval} conversationId={run.conversation_id} />
         ),
+      )}
+      {artifacts.length > 0 && (
+        <Suspense fallback={null}>
+          <Artifacts artifacts={artifacts} />
+        </Suspense>
       )}
       {active && !lastRunning && <Thinking />}
       {run.status === 'failed' && (
@@ -61,58 +72,67 @@ function stepMeta(step: Step): string | null {
   return null
 }
 
-export function Checklist({ steps, collapsible }: { steps: Step[]; collapsible: boolean }) {
-  const [expanded, setExpanded] = useState(false)
+function TimelineDot({ status }: { status: Step['status'] }) {
+  if (status === 'running')
+    return <span className="absolute top-[2px] -left-[23px] size-3 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+  const color = status === 'error' ? 'bg-danger' : status === 'warning' ? 'bg-accent' : 'bg-approve'
+  return <span className={`absolute top-[5px] -left-[20px] size-2 rounded-full ring-2 ring-bg ${color}`} />
+}
 
-  // A finished run collapses to a single compact summary bar that expands on click,
-  // so the thread stays tidy. A live run shows its steps streaming.
-  if (collapsible && !expanded) {
-    const status = steps.some((s) => s.status === 'error')
-      ? 'error'
-      : steps.some((s) => s.status === 'warning')
-        ? 'warning'
-        : 'done'
+export function Checklist({ steps, defaultExpanded = false }: { steps: Step[]; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  const running = steps.find((s) => s.status === 'running')
+  const status = steps.some((s) => s.status === 'error')
+    ? 'error'
+    : steps.some((s) => s.status === 'warning')
+      ? 'warning'
+      : 'done'
+
+  // Always collapsed by default — a slim one-line summary that shows the current step while
+  // the agent is working. The user expands it into the full timeline only when they want to.
+  if (!expanded) {
     return (
       <button
         onClick={() => setExpanded(true)}
-        className="group flex items-center gap-2 self-stretch rounded-[12px] border border-line bg-panel px-3.5 py-2.5 text-[13px] text-muted transition hover:border-faint"
+        className="group flex items-center gap-2 self-start py-0.5 text-[12.5px] text-muted transition hover:text-ink"
       >
-        <StepIcon status={status} />
-        <span className="font-medium text-ink">Agent activity</span>
-        <span className="text-faint">· {steps.length} step{steps.length !== 1 ? 's' : ''}</span>
-        <ChevronIcon className="ml-auto size-4 text-faint transition group-hover:text-ink" />
+        <StepIcon status={running ? 'running' : status} />
+        <span className="font-medium text-ink/90">Agent activity</span>
+        <span className="text-faint">· {running ? running.label : `${steps.length} step${steps.length !== 1 ? 's' : ''}`}</span>
+        <ChevronIcon className="size-3.5 text-faint transition group-hover:text-ink" />
       </button>
     )
   }
 
   return (
-    <div className="flex flex-col gap-2 self-stretch rounded-[12px] border border-line bg-panel px-3.5 py-3 text-[13px]">
-      {collapsible && (
-        <button
-          onClick={() => setExpanded(false)}
-          className="group mb-0.5 flex items-center gap-2 text-left text-muted transition hover:text-ink"
-        >
-          <span className="font-medium text-ink">Agent activity</span>
-          <span className="text-faint">· {steps.length} steps</span>
-          <ChevronIcon className="ml-auto size-4 rotate-180 text-faint transition group-hover:text-ink" />
-        </button>
-      )}
-      {steps.map((s) => (
-        <div key={s.seq}>
-          <div className="flex gap-2 text-muted">
-            <StepIcon status={s.status} />
-            <span className={`min-w-0 ${s.status === 'running' ? 'text-ink' : ''}`}>
-              <b className="font-semibold text-ink">{s.label}</b>
-              {stepMeta(s) && <span className="text-faint">&nbsp;→ {stepMeta(s)}</span>}
+    <div className="max-w-full self-start text-[13px]">
+      <button
+        onClick={() => setExpanded(false)}
+        className="group mb-2.5 flex items-center gap-2 text-left text-[12.5px] text-muted transition hover:text-ink"
+      >
+        <StepIcon status={running ? 'running' : status} />
+        <span className="font-medium text-ink/90">Agent activity</span>
+        <span className="text-faint">· {steps.length} steps</span>
+        <ChevronIcon className="size-3.5 rotate-180 text-faint transition group-hover:text-ink" />
+      </button>
+      <div className="ml-[6px] flex flex-col gap-2.5 border-l border-line pl-5">
+        {steps.map((s) => (
+          <div key={s.seq} className="relative">
+            <TimelineDot status={s.status} />
+            <span className="leading-snug">
+              <b className={`font-medium ${s.status === 'running' ? 'text-ink' : 'text-ink/90'}`}>{s.label}</b>
+              {stepMeta(s) && <span className="text-faint"> → {stepMeta(s)}</span>}
             </span>
+            {s.kind === 'plan' && Array.isArray(s.detail?.steps) && (s.detail.steps as string[]).length > 0 && (
+              <ol className="mt-1 ml-3.5 list-decimal space-y-0.5 text-[12.5px] text-faint marker:text-faint">
+                {(s.detail.steps as string[]).map((p, j) => (
+                  <li key={j} className="line-clamp-2">{p}</li>
+                ))}
+              </ol>
+            )}
           </div>
-          {s.kind === 'plan' && Array.isArray(s.detail?.steps) && (s.detail.steps as string[]).length > 0 && (
-            <ol className="mt-1.5 ml-6 list-decimal space-y-0.5 text-[12.5px] text-faint">
-              {(s.detail.steps as string[]).map((p, j) => <li key={j}>{p}</li>)}
-            </ol>
-          )}
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   )
 }
@@ -149,32 +169,32 @@ function ApprovalCard({ approval, conversationId }: { approval: Approval; conver
 
   return (
     <>
-      <div className="self-stretch rounded-[15px] border border-line bg-panel px-[18px] py-4">
-        <div className="mb-2 flex items-center justify-between">
-          <b className="text-sm">{CARD_TITLE[server] ?? server}</b>
-          <span className={`flex items-center gap-[5px] rounded-full px-2.5 py-1 text-[11.5px] ${badge.cls}`}>{badge.text}</span>
+      <div className="max-w-[460px] self-start rounded-[12px] border border-line bg-panel px-3.5 py-3">
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <b className="text-[13px]">{CARD_TITLE[server] ?? server}</b>
+          <span className={`flex items-center gap-[5px] rounded-full px-2 py-0.5 text-[11px] ${badge.cls}`}>{badge.text}</span>
         </div>
-        <div className="text-sm text-muted">{handoff ? approval.summary : approval.reason}</div>
+        <div className="text-[12.5px] text-muted">{handoff ? approval.summary : approval.reason}</div>
         {handoff ? (
-          <div className="relative mt-3 h-[140px] overflow-hidden rounded-[10px] screen-gradient">
+          <div className="relative mt-2.5 h-[130px] overflow-hidden rounded-[10px] screen-gradient">
             {screenshot && <img src={screenshot} alt="Agent browser" className="size-full object-cover object-top" />}
           </div>
         ) : (
-          <pre className="mt-3 max-h-64 overflow-auto rounded-[10px] border border-line bg-bg2 px-3.5 py-3 font-sans text-[13px] leading-relaxed whitespace-pre-wrap text-ink">
+          <pre className="mt-2 max-h-40 overflow-auto rounded-[9px] border border-line bg-bg2 px-3 py-2 font-sans text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink">
             {approval.summary}
           </pre>
         )}
         {pending && (
-          <div className="mt-3.5 flex gap-2.5">
+          <div className="mt-3 flex gap-2">
             {handoff ? (
               <>
-                <button onClick={() => setTookOver(true)} className="rounded-full bg-ink px-4 py-[9px] text-[13px] font-medium text-ink-dark">
+                <button onClick={() => setTookOver(true)} className="rounded-full bg-ink px-3.5 py-[7px] text-[12.5px] font-medium text-ink-dark">
                   Take over
                 </button>
                 <button
                   disabled={decide.isPending}
                   onClick={() => decide.mutate('approve')}
-                  className="rounded-full bg-panel-strong px-4 py-[9px] text-[13px] font-medium"
+                  className="rounded-full bg-panel-strong px-3.5 py-[7px] text-[12.5px] font-medium"
                 >
                   I'm done
                 </button>
@@ -184,14 +204,14 @@ function ApprovalCard({ approval, conversationId }: { approval: Approval; conver
                 <button
                   disabled={decide.isPending}
                   onClick={() => decide.mutate('approve')}
-                  className="rounded-full bg-ink px-4 py-[9px] text-[13px] font-medium text-ink-dark disabled:opacity-60"
+                  className="rounded-full bg-ink px-3.5 py-[7px] text-[12.5px] font-medium text-ink-dark disabled:opacity-60"
                 >
                   Approve
                 </button>
                 <button
                   disabled={decide.isPending}
                   onClick={() => decide.mutate('reject')}
-                  className="rounded-full bg-panel-strong px-4 py-[9px] text-[13px] font-medium disabled:opacity-60"
+                  className="rounded-full bg-panel-strong px-3.5 py-[7px] text-[12.5px] font-medium disabled:opacity-60"
                 >
                   Reject
                 </button>

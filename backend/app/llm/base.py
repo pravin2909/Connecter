@@ -1,7 +1,11 @@
 """Provider-neutral LLM interface. The agent only depends on this module."""
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+# Called with each new chunk of user-visible answer text as it streams in.
+OnToken = Callable[[str], Awaitable[None]]
 
 
 @dataclass
@@ -42,6 +46,7 @@ class LLMProvider(Protocol):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
+        on_token: OnToken | None = None,
     ) -> LLMResponse: ...
 
     async def complete_json(

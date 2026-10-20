@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from app.agent.runner import RunError, approval_dict
-from app.api.deps import DB, ContainerDep
+from app.api.deps import DB, ContainerDep, CurrentUser
 from app.api.schemas import (
     ConversationCreate,
     ConversationDetail,
@@ -20,28 +20,33 @@ from app.api.schemas import (
     ToolCallOut,
 )
 from app.db.models import AgentRun, AgentStep, Approval, Conversation, Message, ToolCall, User
-from app.db.session import LOCAL_USER_EMAIL
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 PALETTE = ["#4FA98C", "#E0A03D", "#5B6EF5", "#8B7CF0", "#4A7FE0", "#D97B3D", "#7C6FE8"]
 
 
-async def _get(db, conversation_id: uuid.UUID) -> Conversation:
+async def _get(db, conversation_id: uuid.UUID, user: User) -> Conversation:
+    """Fetch a conversation the user owns; 404 (not 403) hides others' ids."""
     convo = await db.get(Conversation, conversation_id)
-    if convo is None:
+    if convo is None or convo.user_id != user.id:
         raise HTTPException(404, "Conversation not found")
     return convo
 
 
 @router.get("", response_model=list[ConversationOut])
-async def list_conversations(db: DB):
-    return (await db.scalars(select(Conversation).order_by(Conversation.updated_at.desc()))).all()
+async def list_conversations(db: DB, user: CurrentUser):
+    return (
+        await db.scalars(
+            select(Conversation)
+            .where(Conversation.user_id == user.id)
+            .order_by(Conversation.pinned.desc(), Conversation.updated_at.desc())
+        )
+    ).all()
 
 
 @router.post("", response_model=ConversationOut, status_code=201)
-async def create_conversation(body: ConversationCreate, db: DB):
-    user = await db.scalar(select(User).where(User.email == LOCAL_USER_EMAIL))
+async def create_conversation(body: ConversationCreate, db: DB, user: CurrentUser):
     convo = Conversation(user_id=user.id, title=body.title or "New chat", color=body.color or random.choice(PALETTE))
     db.add(convo)
     await db.commit()
@@ -50,8 +55,8 @@ async def create_conversation(body: ConversationCreate, db: DB):
 
 
 @router.get("/{conversation_id}", response_model=ConversationDetail)
-async def get_conversation(conversation_id: uuid.UUID, db: DB):
-    convo = await _get(db, conversation_id)
+async def get_conversation(conversation_id: uuid.UUID, db: DB, user: CurrentUser):
+    convo = await _get(db, conversation_id, user)
     messages = (
         await db.scalars(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at))
     ).all()
@@ -66,20 +71,22 @@ async def get_conversation(conversation_id: uuid.UUID, db: DB):
 
 
 @router.patch("/{conversation_id}", response_model=ConversationOut)
-async def update_conversation(conversation_id: uuid.UUID, body: ConversationPatch, db: DB):
-    convo = await _get(db, conversation_id)
+async def update_conversation(conversation_id: uuid.UUID, body: ConversationPatch, db: DB, user: CurrentUser):
+    convo = await _get(db, conversation_id, user)
     if body.title is not None:
         convo.title = body.title
     if body.color is not None:
         convo.color = body.color
+    if body.pinned is not None:
+        convo.pinned = body.pinned
     await db.commit()
     await db.refresh(convo)
     return convo
 
 
 @router.delete("/{conversation_id}", status_code=204)
-async def delete_conversation(conversation_id: uuid.UUID, db: DB, c: ContainerDep):
-    await _get(db, conversation_id)
+async def delete_conversation(conversation_id: uuid.UUID, db: DB, c: ContainerDep, user: CurrentUser):
+    await _get(db, conversation_id, user)
     active = (
         await db.scalars(
             select(AgentRun.id).where(
@@ -90,13 +97,14 @@ async def delete_conversation(conversation_id: uuid.UUID, db: DB, c: ContainerDe
     ).all()
     for run_id in active:
         await c.runner.cancel(run_id)
-    convo = await _get(db, conversation_id)
+    convo = await _get(db, conversation_id, user)
     await db.delete(convo)
     await db.commit()
 
 
 @router.post("/{conversation_id}/messages", response_model=SendResult, status_code=202)
-async def send_message(conversation_id: uuid.UUID, body: MessageIn, c: ContainerDep):
+async def send_message(conversation_id: uuid.UUID, body: MessageIn, c: ContainerDep, db: DB, user: CurrentUser):
+    await _get(db, conversation_id, user)  # ownership check before starting a run
     try:
         msg, run = await c.runner.start(conversation_id, body.content.strip())
     except RunError as e:

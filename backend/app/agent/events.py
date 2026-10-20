@@ -20,11 +20,16 @@ class EventBus:
         self._subs: dict[str, set[asyncio.Queue]] = defaultdict(set)
         self._limit = history_limit
 
-    def publish(self, run_id: str, event: dict[str, Any]) -> None:
+    def publish(self, run_id: str, event: dict[str, Any], persist: bool = True) -> None:
         hist = self._history[run_id]
-        event = {**event, "id": (hist[-1]["id"] + 1) if hist else 1}
-        hist.append(event)
-        del hist[: -self._limit]
+        if persist:
+            event = {**event, "id": (hist[-1]["id"] + 1) if hist else 1}
+            hist.append(event)
+            del hist[: -self._limit]
+        else:
+            # Transient (e.g. streamed answer tokens): fan out live but keep it out of the
+            # replay history, so it never pollutes a reconnect or the step record.
+            event = {**event, "id": (hist[-1]["id"] if hist else 0)}
         for q in list(self._subs[run_id]):
             q.put_nowait(event)
 
@@ -84,5 +89,5 @@ class Emitter:
         )
         return seq
 
-    def event(self, run_id: str, type_: str, **payload: Any) -> None:
-        self.bus.publish(run_id, {"type": type_, **payload})
+    def event(self, run_id: str, type_: str, persist: bool = True, **payload: Any) -> None:
+        self.bus.publish(run_id, {"type": type_, **payload}, persist=persist)

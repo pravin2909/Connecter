@@ -129,12 +129,37 @@ REQUEST_CAPABILITY = ToolSpec(
 )
 
 
+LOOK = ToolSpec(
+    name=f"browser{SEP}look",
+    capability="browser",
+    tool="look",
+    description="Look at the CURRENT browser screen with a vision model: it describes what is "
+    "on the page and gives approximate pixel coordinates (x, y) for clickable things, which you "
+    "then use with browser__click_at(x, y). Use this when an element is not in the interactive "
+    "list (canvas, maps, custom widgets) or you need to understand the layout visually.",
+    parameters={
+        "type": "object",
+        "properties": {"question": {"type": "string", "description": "What to look for (optional)"}},
+    },
+    read_only=True,
+)
+
+_LOOK_PROMPT = (
+    "You are the eyes of a browser agent. Describe this web page concisely: the main content, and "
+    "every clickable/typeable element (buttons, links, inputs, menu items) with its approximate "
+    "pixel coordinates as (x, y) in a 1280×800 viewport. Be precise about coordinates."
+)
+
+
 class ToolRegistry:
-    def __init__(self, mcp: MCPManager, rag: RAGService, max_chars: int = 6000, email_configured: bool = True):
+    def __init__(
+        self, mcp: MCPManager, rag: RAGService, max_chars: int = 6000, email_configured: bool = True, vision=None
+    ):
         self.mcp = mcp
         self.rag = rag
         self.max_chars = max_chars
         self.email_configured = email_configured
+        self.vision = vision  # VisionProvider | None — enables the browser__look tool
 
     # ---------------------------------------------------------------- discovery
     def specs(self) -> dict[str, ToolSpec]:
@@ -152,6 +177,10 @@ class ToolRegistry:
                     read_only=bool(ann and ann.read_only_hint),
                     destructive=bool(ann and ann.destructive_hint),
                 )
+        # The vision-powered "look" tool is in-process (not an MCP tool); offer it only when a
+        # vision model is configured and the browser is available.
+        if self.vision is not None and "browser" in self.mcp.tools():
+            specs[LOOK.name] = LOOK
         return specs
 
     def available_capabilities(self) -> list[str]:
@@ -180,14 +209,16 @@ class ToolRegistry:
         return out
 
     # ---------------------------------------------------------------- execution
-    async def call(self, name: str, arguments: dict[str, Any]) -> ToolOutput:
+    async def call(self, name: str, arguments: dict[str, Any], user_id: str | None = None) -> ToolOutput:
         spec = self.specs().get(name)
         if spec is None:
             return ToolOutput(f"Unknown tool '{name}'. Use one of the tools provided.", is_error=True)
         start = time.perf_counter()
         try:
-            if spec.capability == "documents":
-                out = await self._call_documents(spec.tool, arguments)
+            if name == LOOK.name:
+                out = await self._call_look(arguments)
+            elif spec.capability == "documents":
+                out = await self._call_documents(spec.tool, arguments, user_id)
             else:
                 out = self._convert(await self.mcp.call(spec.capability, spec.tool, arguments))
         except Exception as e:  # noqa: BLE001
@@ -207,17 +238,31 @@ class ToolRegistry:
                 images.append((base64.b64decode(block.data), block.mime_type))
         return ToolOutput("\n".join(texts) or ("(image)" if images else "(no output)"), result.is_error, images)
 
-    async def _call_documents(self, tool: str, args: dict[str, Any]) -> ToolOutput:
+    async def _call_look(self, args: dict[str, Any]) -> ToolOutput:
+        if self.vision is None:
+            return ToolOutput("The look tool needs a vision model configured (set VISION_MODEL).", is_error=True)
+        shot = self._convert(await self.mcp.call("browser", "screenshot", {}))
+        if not shot.images:
+            return ToolOutput("No browser screen available — open_browser or navigate first.", is_error=True)
+        img, mime = shot.images[0]
+        prompt = _LOOK_PROMPT + (f"\n\nFocus on: {args['question']}" if args.get("question") else "")
+        try:
+            desc = await self.vision.see(prompt, base64.b64encode(img).decode(), mime or "image/jpeg")
+        except Exception as e:  # noqa: BLE001
+            return ToolOutput(f"Vision model error: {type(e).__name__}: {e}", is_error=True)
+        return ToolOutput(desc or "(the vision model returned nothing)")
+
+    async def _call_documents(self, tool: str, args: dict[str, Any], user_id: str | None = None) -> ToolOutput:
         if tool == "search_documents":
             chunks = await self.rag.search(
-                args.get("query", ""), top_k=args.get("top_k"), documents=args.get("documents")
+                args.get("query", ""), top_k=args.get("top_k"), documents=args.get("documents"), user_id=user_id
             )
             if not chunks:
                 return ToolOutput("No relevant passages found in the indexed documents.", data={"chunks": []})
             # Text is produced later by the execute node, which assigns citation numbers.
             return ToolOutput("", data={"chunks": [chunk_to_dict(c) for c in chunks]})
         if tool == "retrieve_document":
-            ctx = await self.rag.document_context(args["document"])
+            ctx = await self.rag.document_context(args["document"], user_id=user_id)
             parts = []
             for c in ctx["chunks"]:
                 head = " · ".join(x for x in [f"page {c['page_number']}" if c["page_number"] else "", c["section"] or ""] if x)
@@ -230,7 +275,7 @@ class ToolRegistry:
             chunk_id = args["chunk_id"]
             doc_id, _, idx = chunk_id.rpartition(":")
             window = int(args.get("window") or 1)
-            chunks = await self.rag.store.get_document_chunks(doc_id)
+            chunks = await self.rag.store.get_document_chunks(doc_id, user_id=user_id)
             idx_i = int(idx)
             near = [c for c in chunks if abs(c["chunk_index"] - idx_i) <= window]
             if not near:

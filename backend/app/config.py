@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.2
     llm_timeout_s: float = 300
 
+    # Vision (optional, for browser "computer use"). When vision_model is set, a `look` tool
+    # is enabled that lets the agent SEE the current browser screen (describe it + give click
+    # coordinates) using a multimodal model — gpt-oss stays the reasoner. Leave empty to
+    # disable. vision_base_url / vision_api_key default to the main LLM's when blank, so a
+    # vision model loaded in the same LM Studio just needs vision_model set.
+    vision_model: str = ""
+    vision_base_url: str = ""
+    vision_api_key: str = ""
+
     # Embeddings / RAG
     embedding_provider: Literal["fastembed", "openai"] = "fastembed"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
@@ -52,6 +61,15 @@ class Settings(BaseSettings):
     agent_max_steps: int = 15
     agent_history_messages: int = 10
     tool_result_max_chars: int = 6000
+
+    # Auth
+    # When false, the app runs in single-user local mode (the local@connecter.ai user,
+    # no login). Set true in any shared/production deployment.
+    auth_enabled: bool = True
+    session_cookie_name: str = "connecter_session"
+    session_ttl_days: int = 30
+    # Send the session cookie only over HTTPS. Keep false for http://localhost dev.
+    secure_cookies: bool = False
 
     # App
     data_dir: Path = BACKEND_DIR / ".data"

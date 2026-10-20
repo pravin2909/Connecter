@@ -81,6 +81,7 @@ class RAGService:
                 created = datetime.now(UTC).isoformat()
                 payloads = [
                     {
+                        "user_id": str(doc.user_id) if doc.user_id else None,
                         "document_id": str(doc.id),
                         "chunk_id": f"{doc.id}:{c.index}",
                         "chunk_index": c.index,
@@ -114,12 +115,17 @@ class RAGService:
     def process_query(query: str) -> str:
         return re.sub(r"\s+", " ", query).strip()
 
-    async def resolve_document_filter(self, documents: list[str] | None) -> list[str] | None:
-        """Map filenames / partial names the agent mentions to document ids."""
+    async def resolve_document_filter(
+        self, documents: list[str] | None, user_id: str | None = None
+    ) -> list[str] | None:
+        """Map filenames / partial names the agent mentions to document ids (user-scoped)."""
         if not documents:
             return None
         async with SessionLocal() as db:
-            rows = (await db.execute(select(Document.id, Document.filename).where(Document.status == "ready"))).all()
+            q = select(Document.id, Document.filename).where(Document.status == "ready")
+            if user_id:
+                q = q.where(Document.user_id == uuid.UUID(user_id))
+            rows = (await db.execute(q)).all()
         wanted = [d.lower() for d in documents]
         ids = [str(r.id) for r in rows if any(w in r.filename.lower() or w == str(r.id) for w in wanted)]
         return ids or None
@@ -130,18 +136,20 @@ class RAGService:
         top_k: int | None = None,
         documents: list[str] | None = None,
         file_types: list[str] | None = None,
+        user_id: str | None = None,
     ) -> list[RetrievedChunk]:
         query = self.process_query(query)
         if not query:
             return []
         top_k = top_k or self.settings.retrieval_top_k
         await self._ensure_collection()
-        doc_ids = await self.resolve_document_filter(documents)
+        doc_ids = await self.resolve_document_filter(documents, user_id)
         types = [t.lower().lstrip(".") for t in file_types or [] if t.lower().lstrip(".") in SUPPORTED_TYPES] or None
         dense_q = await self.dense.embed_query(query)
         sparse_q = await self.sparse.embed_query(query)
         candidates = await self.store.hybrid_search(
-            dense_q, sparse_q, self.settings.retrieval_candidates, document_ids=doc_ids, file_types=types
+            dense_q, sparse_q, self.settings.retrieval_candidates, document_ids=doc_ids, file_types=types,
+            user_id=user_id,
         )
         if not candidates:
             return []
@@ -163,12 +171,14 @@ class RAGService:
             for c, score in ranked[:top_k]
         ]
 
-    async def document_context(self, document: str, max_chars: int = 12_000) -> dict[str, Any]:
+    async def document_context(
+        self, document: str, max_chars: int = 12_000, user_id: str | None = None
+    ) -> dict[str, Any]:
         """Return a document's content in order (for 'summarize my report' style requests)."""
-        ids = await self.resolve_document_filter([document])
+        ids = await self.resolve_document_filter([document], user_id)
         if not ids:
             raise ValueError(f"No indexed document matches '{document}'")
-        chunks = await self.store.get_document_chunks(ids[0])
+        chunks = await self.store.get_document_chunks(ids[0], user_id=user_id)
         text, used = [], 0
         for c in chunks:
             if used + len(c["content"]) > max_chars:

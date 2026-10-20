@@ -16,6 +16,7 @@ class PendingCall(TypedDict, total=False):
 
 class AgentState(TypedDict, total=False):
     run_id: str
+    user_id: str  # owner of the conversation; scopes document retrieval
     goal: str
     history: list[dict[str, Any]]  # earlier conversation turns (role/content)
     documents: list[str]  # names of indexed documents, for the system prompt

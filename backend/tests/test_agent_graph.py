@@ -29,9 +29,12 @@ class ScriptedLLM:
     async def complete_json(self, messages, schema, name="result"):
         return self.plan
 
-    async def chat(self, messages, tools=None, temperature=None):
+    async def chat(self, messages, tools=None, temperature=None, on_token=None):
         self.seen.append(messages)
-        return self.responses.pop(0)
+        resp = self.responses.pop(0)
+        if on_token and resp.content and not resp.tool_calls:
+            await on_token(resp.content)  # exercise the streaming path
+        return resp
 
     async def list_models(self):
         return [self.model]
@@ -57,10 +60,10 @@ class FakeRegistry:
     def lookup_schemas(self):
         return []
 
-    async def call(self, name, args):
+    async def call(self, name, args, user_id=None):
         self.calls.append((name, args))
         if name == "email__find_contact":
-            return ToolOutput('[{"name": "Rahul", "email": "rahul@example.com"}]')
+            return ToolOutput('[{"name": "pravin", "email": "pravin@example.com"}]')
         return ToolOutput('{"status": "sent"}')
 
 
@@ -91,19 +94,19 @@ async def _drain(bus, run_id):
 
 @pytest.mark.parametrize("decision", ["approve", "reject"])
 async def test_send_email_pauses_for_approval(decision):
-    email = {"to": "rahul@example.com", "subject": "Report", "body": "Hi Rahul"}
+    email = {"to": "pravin@example.com", "subject": "Report", "body": "Hi Pravin"}
     llm = ScriptedLLM(
-        {"summary": "email rahul", "needs_tools": True, "capabilities": ["email"], "steps": ["find", "send"]},
+        {"summary": "email pravin", "needs_tools": True, "capabilities": ["email"], "steps": ["find", "send"]},
         [
-            LLMResponse("", [tc("email__find_contact", {"name": "Rahul"})]),
+            LLMResponse("", [tc("email__find_contact", {"name": "Pravin"})]),
             LLMResponse("", [tc("email__send_email", email)]),
-            LLMResponse("Sent the report to Rahul." if decision == "approve" else "Not sent: you rejected it."),
+            LLMResponse("Sent the report to Pravin." if decision == "approve" else "Not sent: you rejected it."),
         ],
     )
     registry = FakeRegistry()
     runner, bus, convo_id = await _setup(llm, registry)
 
-    _, run = await runner.start(convo_id, "Email Rahul the report")
+    _, run = await runner.start(convo_id, "Email Pravin the report")
     events = await _drain(bus, str(run.id))
     assert events[-1] == {**events[-1], "type": "done", "status": "awaiting_approval"}
     approval_evt = next(e for e in events if e["type"] == "approval_required")

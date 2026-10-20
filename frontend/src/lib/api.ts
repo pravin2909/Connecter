@@ -7,6 +7,7 @@ export interface Conversation {
   title: string
   color: string
   preview: string | null
+  pinned: boolean
   created_at: string
   updated_at: string
 }
@@ -113,6 +114,21 @@ export interface Capability {
   tools: string[]
 }
 
+export interface FilePreview {
+  kind: 'table' | 'text' | 'unsupported' | 'empty'
+  columns?: string[]
+  rows?: string[][]
+  text?: string
+  format?: 'markdown' | 'plain'
+}
+
+export interface User {
+  id: string
+  email: string
+  display_name: string
+  created_at: string
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -124,6 +140,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
+    credentials: 'include', // send/receive the session cookie
     headers: init?.body instanceof FormData ? init.headers : { 'content-type': 'application/json', ...init?.headers },
   })
   if (!res.ok) {
@@ -143,11 +160,20 @@ export const api = {
   health: () => request<Health>('/health'),
   tools: () => request<Capability[]>('/tools'),
 
+  me: () => request<User>('/auth/me'),
+  login: (email: string, password: string) =>
+    request<User>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  register: (email: string, password: string, display_name?: string) =>
+    request<User>('/auth/register', { method: 'POST', body: JSON.stringify({ email, password, display_name }) }),
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
+
   conversations: () => request<Conversation[]>('/conversations'),
   createConversation: () => request<Conversation>('/conversations', { method: 'POST', body: '{}' }),
   conversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
   renameConversation: (id: string, title: string) =>
     request<Conversation>(`/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  pinConversation: (id: string, pinned: boolean) =>
+    request<Conversation>(`/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ pinned }) }),
   deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: 'DELETE' }),
   send: (id: string, content: string) =>
     request<{ message: Message; run: Run }>(`/conversations/${id}/messages`, {
@@ -161,6 +187,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ decision, note }),
     }),
+
+  filePreview: (path: string) => request<FilePreview>(`/files/preview?path=${encodeURIComponent(path)}`),
 
   documents: () => request<DocumentInfo[]>('/documents'),
   uploadDocument: (file: File) => {

@@ -41,6 +41,7 @@ class QdrantStore:
             sparse_vectors_config={SPARSE: models.SparseVectorParams(modifier=models.Modifier.IDF)},
         )
         for field, schema in (
+            ("user_id", models.PayloadSchemaType.KEYWORD),
             ("document_id", models.PayloadSchemaType.KEYWORD),
             ("file_type", models.PayloadSchemaType.KEYWORD),
             ("filename", models.PayloadSchemaType.KEYWORD),
@@ -80,10 +81,11 @@ class QdrantStore:
         limit: int,
         document_ids: list[str] | None = None,
         file_types: list[str] | None = None,
+        user_id: str | None = None,
     ) -> list[StoredChunk]:
         if not await self.client.collection_exists(self.collection):
             return []
-        flt = _filter(document_ids=document_ids, file_types=file_types)
+        flt = _filter(document_ids=document_ids, file_types=file_types, user_id=user_id)
         res = await self.client.query_points(
             self.collection,
             prefetch=[
@@ -110,11 +112,16 @@ class QdrantStore:
             for p in res.points
         ]
 
-    async def get_document_chunks(self, document_id: str, limit: int = 500) -> list[dict[str, Any]]:
+    async def get_document_chunks(
+        self, document_id: str, limit: int = 500, user_id: str | None = None
+    ) -> list[dict[str, Any]]:
         if not await self.client.collection_exists(self.collection):
             return []
         points, _ = await self.client.scroll(
-            self.collection, scroll_filter=_filter(document_ids=[document_id]), limit=limit, with_payload=True
+            self.collection,
+            scroll_filter=_filter(document_ids=[document_id], user_id=user_id),
+            limit=limit,
+            with_payload=True,
         )
         return sorted((p.payload for p in points), key=lambda p: p["chunk_index"])
 
@@ -126,8 +133,10 @@ class QdrantStore:
             return False
 
 
-def _filter(document_ids=None, file_types=None) -> models.Filter | None:
+def _filter(document_ids=None, file_types=None, user_id=None) -> models.Filter | None:
     must = []
+    if user_id:
+        must.append(models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id)))
     if document_ids:
         must.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))
     if file_types:

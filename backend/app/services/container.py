@@ -13,7 +13,7 @@ from app.agent.policy import PolicyEngine
 from app.agent.runner import AgentRunner
 from app.agent.tools import ToolRegistry
 from app.config import Settings
-from app.llm.openai_compat import OpenAICompatibleProvider
+from app.llm.openai_compat import OpenAICompatibleProvider, VisionProvider
 from app.mcp_client import MCPManager, default_servers
 from app.rag.service import RAGService
 
@@ -24,6 +24,7 @@ class Container:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.llm = OpenAICompatibleProvider(settings)
+        self.vision = VisionProvider(settings) if settings.vision_model else None
         self.mcp = MCPManager(default_servers(settings))
         self.rag = RAGService(settings)
         self.registry = ToolRegistry(
@@ -31,6 +32,7 @@ class Container:
             self.rag,
             settings.tool_result_max_chars,
             email_configured=bool(settings.email_address and settings.email_password),
+            vision=self.vision,
         )
         self.policy = PolicyEngine(self.registry)
         self.bus = EventBus()
