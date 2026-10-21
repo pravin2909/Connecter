@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="docs/assets/landing.png" alt="Connecter" width="100%">
+  <img src="docs/assets/banner.png" alt="Connecter" width="100%">
 </p>
-
-<h1 align="center">Connecter</h1>
 
 <p align="center">
   A <strong>local-first AI computer agent</strong>. It plans multi-step tasks, uses your private
@@ -30,7 +28,7 @@
 ## Contents
 
 - [What it does](#what-it-does)
-- [Screenshots](#screenshots)
+- [Demo](#demo)
 - [Architecture](#architecture)
 - [Bring your own model](#bring-your-own-model)
 - [Quickstart](#quickstart)
@@ -39,7 +37,6 @@
 - [API](#api)
 - [Project structure](#project-structure)
 - [Tech stack](#tech-stack)
-- [Roadmap](#roadmap)
 
 ---
 
@@ -58,17 +55,9 @@
 
 ---
 
-## Screenshots
+## Demo
 
-<p align="center"><img src="docs/assets/home.png" alt="Connecter home" width="100%"></p>
-
-| Live activity + artifacts | Documents — agentic RAG |
-|---|---|
-| ![Activity](docs/assets/activity.png) | ![Documents](docs/assets/documents.png) |
-| **Connected tools — MCP** | **Rich artifacts** |
-| ![Tools](docs/assets/tools.png) | ![Artifacts](docs/assets/artifacts.png) |
-| **Long-term memory** | |
-| ![Memory](docs/assets/memory.png) | |
+<p align="center"><img src="docs/assets/demo.gif" alt="Connecter demo" width="100%"></p>
 
 ---
 
@@ -232,19 +221,6 @@ Connecter/
 
 **Frontend** — React 19 · TypeScript · Vite · Tailwind CSS v4 · TanStack Query · Zustand · Recharts ·
 react-leaflet · react-markdown + rehype-highlight.
-
----
-
-## Roadmap
-
-- [x] Auth + per-user isolation
-- [x] Agentic hybrid RAG with citations
-- [x] MCP tools: files, web, email, browser
-- [x] Browser / computer-use agent
-- [x] Long-term memory
-- [ ] Deep Research mode
-- [ ] Evaluation harness
-- [ ] One-command deployment
 
 ---
 
