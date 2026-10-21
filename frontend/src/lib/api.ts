@@ -114,6 +114,13 @@ export interface Capability {
   tools: string[]
 }
 
+export interface MemoryItem {
+  id: string
+  content: string
+  kind: string
+  created_at: string
+}
+
 export interface FilePreview {
   kind: 'table' | 'text' | 'unsupported' | 'empty'
   columns?: string[]
@@ -189,6 +196,9 @@ export const api = {
     }),
 
   filePreview: (path: string) => request<FilePreview>(`/files/preview?path=${encodeURIComponent(path)}`),
+
+  memories: () => request<MemoryItem[]>('/memories'),
+  deleteMemory: (id: string) => request<void>(`/memories/${id}`, { method: 'DELETE' }),
 
   documents: () => request<DocumentInfo[]>('/documents'),
   uploadDocument: (file: File) => {

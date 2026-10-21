@@ -20,6 +20,7 @@ class AgentState(TypedDict, total=False):
     goal: str
     history: list[dict[str, Any]]  # earlier conversation turns (role/content)
     documents: list[str]  # names of indexed documents, for the system prompt
+    memories: list[str]  # durable facts about the user, retrieved for the system prompt
     available_capabilities: list[str]
     plan: dict[str, Any]
     capabilities: list[str]  # capabilities whose tools are bound to the LLM

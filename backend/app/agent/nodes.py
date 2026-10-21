@@ -44,6 +44,7 @@ _LABELS = {
     "file__create_file": "Creating {path}",
     "file__delete_file": "Deleting {path}",
     "web__search_web": "Searching web",
+    "web__get_weather": "Checking the weather",
     "web__read_page": "Reading web page",
     "web__open_url": "Opening URL",
     "email__search_emails": "Searching email",
@@ -86,6 +87,7 @@ class AgentDeps:
     policy: PolicyEngine
     emitter: Emitter
     settings: Settings
+    memory: Any = None
 
 
 class AgentNodes:
@@ -100,8 +102,12 @@ class AgentNodes:
             if state.get("user_id"):
                 q = q.where(Document.user_id == uuid.UUID(state["user_id"]))
             docs = (await db.scalars(q)).all()
+        memories = []
+        if self.d.memory is not None and state.get("user_id"):
+            memories = await self.d.memory.retrieve(state["user_id"], state["goal"])
         return {
             "documents": list(docs),
+            "memories": memories,
             "available_capabilities": self.d.registry.available_capabilities(),
             "step_count": 0,
             "consecutive_errors": 0,
@@ -161,7 +167,10 @@ class AgentNodes:
 
     # ------------------------------------------------------------ agent (LLM)
     def _llm_messages(self, state: AgentState) -> list[dict[str, Any]]:
-        system = agent_system_prompt(state.get("plan", {}), state.get("documents", []), str(self.d.settings.file_workspace))
+        system = agent_system_prompt(
+            state.get("plan", {}), state.get("documents", []), str(self.d.settings.file_workspace),
+            state.get("memories", []),
+        )
         return [
             {"role": "system", "content": system},
             *state.get("history", []),

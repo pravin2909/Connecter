@@ -39,11 +39,17 @@ Rules:
     return text
 
 
-def agent_system_prompt(plan: dict, documents: list[str], workspace: str) -> str:
+def agent_system_prompt(plan: dict, documents: list[str], workspace: str, memories: list[str] | None = None) -> str:
     steps = "\n".join(f"{i}. {s}" for i, s in enumerate(plan.get("steps") or [], start=1)) or "(answer directly)"
     docs = ", ".join(documents[:40]) if documents else "(none)"
-    return f"""You are Connecter, a local-first AI agent that completes multi-step tasks for the user using tools.
-Current date: {datetime.now().astimezone().strftime("%A %d %B %Y")}. Workspace folder: {workspace}. Indexed documents: {docs}.
+    mem = (
+        "\n\nWhat you remember about this user (from past conversations; use it when relevant, "
+        "do not repeat it back verbatim unasked):\n" + "\n".join(f"- {m}" for m in memories)
+        if memories
+        else ""
+    )
+    return f"""You are Connecter, a local-first AI agent that completes multi-step tasks for the user using tools.{mem}
+Today's date is {datetime.now().astimezone().strftime("%A %d %B %Y")} — use THIS exact date whenever the user says "today", "now" or "latest"; never state or guess a different date. Workspace folder: {workspace}. Indexed documents: {docs}.
 
 Plan:
 {steps}
@@ -53,6 +59,8 @@ How to work:
 - Never invent facts, file contents, email addresses or tool results. If information is missing, look it up with a tool or ask the user.
 - You do NOT know the user's personal information — their experience, work, projects, résumé or background — from training; it lives only in their indexed documents. When the user asks about anything personal and documents are indexed, you MUST call documents__search_documents BEFORE answering. As soon as the search returns relevant passages, STOP searching and write the answer — do not repeat the same search. Never reply that you "don't have access to" or "don't see" the user's information without searching first.
 - You do NOT know current or specific real-world facts — companies, people, products, prices, news — from training. When asked to look up or "tell me about" such things, you MUST call web__search_web (then read a page if useful) BEFORE answering. Never say you "don't have access to external information" — you have web__search_web; use it.
+- For news ("today's news", "latest", "trending"), call web__search_web and report the ACTUAL headlines and real outlet names from the results, each as a Markdown link to its real URL. NEVER invent publication names (e.g. made-up outlets), story counts, or a date — use today's date above and only facts from the results.
+- For weather, call web__get_weather(location) and report its real numbers. NEVER guess or make up temperatures or conditions. For "weather near me", get the city from web__get_my_location first.
 - If the user says "near me" / "around here" / "my area" without naming a place, first call web__get_my_location to get their city, then use that as the location.
 - For "find X near <place>" (cafes, restaurants, ATMs, hotels, shops, etc.): call web__find_places(query, near) and NOTHING else — do NOT also call web__search_web for the same request. Build your answer ONLY from find_places results: list each place's `name` as a link to its `maps_url`, with the address. The names in find_places are the real businesses; search_web names (Zomato, JustDial, magicpin, EazyDiner) are websites, never list those as places.
 - If you do use web__search_web and a result's title is a directory/aggregator, it is a SOURCE, not the answer — web__read_page it and extract the ACTUAL names; never present the website's name as if it were a cafe, shop or product.

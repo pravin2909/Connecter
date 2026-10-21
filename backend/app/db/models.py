@@ -193,3 +193,17 @@ class Document(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class Memory(Base):
+    """A durable fact or preference about a user, remembered across conversations. Its
+    embedding lives in Qdrant; this row is the source of truth for text and listing."""
+
+    __tablename__ = "memories"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(16), default="fact")  # fact | preference | episode
+    source_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = _created_at()

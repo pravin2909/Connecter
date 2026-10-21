@@ -26,15 +26,17 @@ class RunError(Exception):
 
 
 class AgentRunner:
-    def __init__(self, graph, bus: EventBus, emitter: Emitter, model: str, history_messages: int, llm=None):
+    def __init__(self, graph, bus: EventBus, emitter: Emitter, model: str, history_messages: int, llm=None, memory=None):
         self.graph = graph
         self.bus = bus
         self.emitter = emitter
         self.model = model
         self.history_messages = history_messages
         self.llm = llm
+        self.memory = memory
         self._tasks: dict[str, asyncio.Task] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._bg: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------ start
     async def start(self, conversation_id: uuid.UUID, content: str) -> tuple[Message, AgentRun]:
@@ -131,10 +133,16 @@ class AgentRunner:
             db.add(msg)
             convo = await db.get(Conversation, run.conversation_id)
             convo.preview = answer[:280]
+            user_id = convo.user_id
             await db.commit()
             await db.refresh(msg)
         await self._set_status(run_id, "completed", finished=True)
         self.emitter.event(run_id, "message", message=message_dict(msg))
+        # Learn durable facts about the user from this turn (background; never blocks the reply).
+        if self.memory is not None:
+            task = asyncio.create_task(self.memory.remember(user_id, goal, answer, uuid.UUID(run_id)))
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)
         # Offer a few next questions (best-effort; never block or fail the run).
         followups = await self._followups(goal, answer)
         if followups:
