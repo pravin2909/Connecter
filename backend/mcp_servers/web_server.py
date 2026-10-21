@@ -111,6 +111,72 @@ async def search_web(query: str, max_results: int = 6) -> str:
     return json.dumps(clean, indent=1)
 
 
+_WMO = {
+    0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Fog", 48: "Depositing rime fog", 51: "Light drizzle", 53: "Drizzle", 55: "Dense drizzle",
+    56: "Freezing drizzle", 57: "Dense freezing drizzle", 61: "Slight rain", 63: "Rain", 65: "Heavy rain",
+    66: "Freezing rain", 67: "Heavy freezing rain", 71: "Slight snow", 73: "Snow", 75: "Heavy snow",
+    77: "Snow grains", 80: "Slight showers", 81: "Showers", 82: "Violent showers",
+    85: "Snow showers", 86: "Heavy snow showers", 95: "Thunderstorm", 96: "Thunderstorm with hail",
+    99: "Thunderstorm with heavy hail",
+}
+
+
+@register(mcp, read_only=True, open_world=True)
+async def get_weather(location: str) -> str:
+    """Get the REAL current weather and a 3-day forecast for a place (temperature, feels-like,
+    humidity, wind, conditions) from Open-Meteo. Use this for any weather question — never
+    guess or make up temperatures."""
+    ua = "Connecter/0.1 (local-first AI agent)"
+    async with httpx.AsyncClient(headers={"User-Agent": ua}, timeout=30) as client:
+        geo = await client.get(
+            "https://nominatim.openstreetmap.org/search", params={"q": location, "format": "json", "limit": 1}
+        )
+        geo.raise_for_status()
+        loc = geo.json()
+        if not loc:
+            return json.dumps({"error": f"Could not find the location '{location}'."})
+        lat, lon = float(loc[0]["lat"]), float(loc[0]["lon"])
+        resp = await client.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+                "daily": "temperature_2m_max,temperature_2m_min,weather_code",
+                "timezone": "auto",
+                "forecast_days": 3,
+            },
+        )
+        resp.raise_for_status()
+        d = resp.json()
+    cur = d.get("current", {})
+    daily = d.get("daily", {})
+    forecast = [
+        {
+            "date": daily["time"][i],
+            "high_c": daily["temperature_2m_max"][i],
+            "low_c": daily["temperature_2m_min"][i],
+            "conditions": _WMO.get(daily["weather_code"][i], "—"),
+        }
+        for i in range(len(daily.get("time", [])))
+    ]
+    return json.dumps(
+        {
+            "location": loc[0].get("display_name", location).split(",")[0],
+            "current": {
+                "temperature_c": cur.get("temperature_2m"),
+                "feels_like_c": cur.get("apparent_temperature"),
+                "humidity_pct": cur.get("relative_humidity_2m"),
+                "wind_kmh": cur.get("wind_speed_10m"),
+                "conditions": _WMO.get(cur.get("weather_code"), "—"),
+            },
+            "forecast": forecast,
+        },
+        indent=1,
+    )
+
+
 @register(mcp, read_only=True, open_world=True)
 async def get_my_location() -> str:
     """Get the user's approximate current location (city, region, country and coordinates)

@@ -130,6 +130,13 @@ class DocumentOut(ORM):
     updated_at: datetime
 
 
+class MemoryOut(ORM):
+    id: uuid.UUID
+    content: str
+    kind: str
+    created_at: datetime
+
+
 class IndexPathIn(BaseModel):
     path: str
 

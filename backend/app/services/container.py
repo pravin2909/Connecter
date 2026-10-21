@@ -15,6 +15,7 @@ from app.agent.tools import ToolRegistry
 from app.config import Settings
 from app.llm.openai_compat import OpenAICompatibleProvider, VisionProvider
 from app.mcp_client import MCPManager, default_servers
+from app.memory.service import MemoryService
 from app.rag.service import RAGService
 
 log = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class Container:
         self.vision = VisionProvider(settings) if settings.vision_model else None
         self.mcp = MCPManager(default_servers(settings))
         self.rag = RAGService(settings)
+        self.memory = MemoryService(settings, self.rag.dense, self.llm)
         self.registry = ToolRegistry(
             self.mcp,
             self.rag,
@@ -83,9 +85,11 @@ class Container:
             checkpointer = InMemorySaver()
 
         await self.mcp.start()
-        deps = AgentDeps(self.llm, self.registry, self.policy, self.emitter, s)
+        deps = AgentDeps(self.llm, self.registry, self.policy, self.emitter, s, self.memory)
         self.graph = build_graph(deps, checkpointer)
-        self.runner = AgentRunner(self.graph, self.bus, self.emitter, self.llm.model, s.agent_history_messages, self.llm)
+        self.runner = AgentRunner(
+            self.graph, self.bus, self.emitter, self.llm.model, s.agent_history_messages, self.llm, self.memory
+        )
         await AgentRunner.recover_after_restart(durable)
 
     async def stop(self) -> None:

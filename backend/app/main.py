@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, conversations, documents, runs, system
+from app.api import auth, conversations, documents, memory, runs, system
 from app.config import get_settings
 from app.db.session import ensure_local_user
 from app.services.container import Container
@@ -34,5 +34,5 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-for r in (auth.router, system.router, conversations.router, runs.router, documents.router):
+for r in (auth.router, system.router, conversations.router, runs.router, documents.router, memory.router):
     app.include_router(r, prefix="/api")

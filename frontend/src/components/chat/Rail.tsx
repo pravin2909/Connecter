@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api'
 import { keys, useConversations, useDocuments, useHealth, useMe, useUploadDocument } from '../../lib/hooks'
@@ -332,7 +332,7 @@ function SettingsPopover({ align, trigger }: { align: string; trigger: (toggle: 
 
 /* ------------------------------------------------------- modern settings modal */
 
-const SETTINGS_SECTIONS = ['General', 'Documents', 'Connected tools', 'About'] as const
+const SETTINGS_SECTIONS = ['General', 'Memory', 'Documents', 'Connected tools', 'About'] as const
 
 function SettingsModal() {
   const open = useUI((s) => s.settingsOpen)
@@ -391,6 +391,7 @@ function SettingsModal() {
                 </SettingsField>
               </div>
             )}
+            {section === 'Memory' && <MemoryPanel />}
             {section === 'Documents' && <DocumentsPanel />}
             {section === 'Connected tools' && <ToolsPanel />}
             {section === 'About' && (
@@ -452,6 +453,46 @@ function MenuRow({
       <span className="shrink-0 text-faint">{icon}</span>
       {children}
     </button>
+  )
+}
+
+function MemoryPanel() {
+  const qc = useQueryClient()
+  const { data: memories = [], isLoading } = useQuery({ queryKey: ['memories'], queryFn: api.memories })
+  const remove = useMutation({
+    mutationFn: api.deleteMemory,
+    onSettled: () => qc.invalidateQueries({ queryKey: ['memories'] }),
+  })
+
+  return (
+    <div>
+      <p className="mb-3 text-[12.5px] leading-relaxed text-muted">
+        Durable facts and preferences Connecter has learned about you from past chats, and uses in future ones.
+      </p>
+      {isLoading ? (
+        <div className="text-[12.5px] text-faint">Loading…</div>
+      ) : memories.length === 0 ? (
+        <div className="rounded-[12px] border border-dashed border-line px-4 py-6 text-center text-[12.5px] leading-relaxed text-faint">
+          Nothing remembered yet. As you chat, Connecter saves things worth recalling here.
+        </div>
+      ) : (
+        <div className="divide-y divide-line border-t border-line">
+          {memories.map((m) => (
+            <div key={m.id} className="group flex items-start gap-2.5 py-2.5">
+              <span className="mt-[7px] size-1.5 shrink-0 rounded-full bg-accent" />
+              <div className="min-w-0 flex-1 text-[13px] leading-snug text-ink">{m.content}</div>
+              <button
+                title="Forget this"
+                onClick={() => remove.mutate(m.id)}
+                className="text-faint opacity-0 transition group-hover:opacity-100 hover:text-danger"
+              >
+                <TrashIcon className="size-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
